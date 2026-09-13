@@ -4,7 +4,7 @@
  * @license   MONARC is licensed under GNU Affero General Public License version 3
  */
 
-namespace Monarc\Extension;
+namespace Monarc\Sign;
 
 use Laminas\ModuleManager\Feature\AutoloaderProviderInterface;
 use Laminas\ModuleManager\Feature\ConfigProviderInterface;

@@ -1,102 +1,195 @@
 <?php declare(strict_types=1);
 
-namespace Monarc\Extension;
+namespace Monarc\Sign;
 
 use Monarc\FrontOffice\Entity\UserRole;
 
 return [
     'doctrine' => [
         'driver' => [
-            'monarc_extension_driver' => [
+            'monarc_sign_driver' => [
                 'class' => \Doctrine\ORM\Mapping\Driver\AnnotationDriver::class,
                 'cache' => 'array',
                 'paths' => [__DIR__ . '/../src/Entity'],
             ],
             'orm_default' => [
                 'drivers' => [
-                    'Monarc\Extension\Entity' => 'monarc_extension_driver',
+                    'Monarc\Sign\Entity' => 'monarc_sign_driver',
                 ],
             ],
             'orm_cli' => [
                 'drivers' => [
-                    'Monarc\Extension\Entity' => 'monarc_extension_driver',
+                    'Monarc\Sign\Entity' => 'monarc_sign_driver',
                 ],
             ],
         ],
     ],
     'service_manager' => [
         'factories' => [
-            \Monarc\Extension\Provider\GenericOAuth2IdentityProvider::class => \Monarc\Extension\Provider\IdentityProviderFactory::class,
-            \Monarc\Extension\Service\IdentityManagementService::class => \Monarc\Extension\Service\IdentityManagementServiceFactory::class,
+            \Monarc\Sign\Service\Signature\SignatureRequestService::class => \Monarc\Sign\Service\Signature\SignatureRequestServiceFactory::class,
+            \Monarc\Sign\Service\Signature\SignatureProcessService::class => \Monarc\Sign\Service\Signature\SignatureProcessServiceFactory::class,
+            \Monarc\Sign\Service\Signature\TrustedXSignatureClient::class => \Monarc\Sign\Service\Signature\TrustedXSignatureClientFactory::class,
+            \Monarc\Sign\Validator\InputValidator\Signature\PostInitiateSignInputValidator::class => \Monarc\Sign\Validator\InputValidator\Signature\SignatureInputValidatorFactory::class,
+            \Monarc\Sign\Validator\InputValidator\Signature\PostRejectSignatureInputValidator::class => \Laminas\ServiceManager\AbstractFactory\ReflectionBasedAbstractFactory::class,
+            \Monarc\Sign\Validator\InputValidator\Signature\PostSignatureRequestInputValidator::class => \Laminas\ServiceManager\AbstractFactory\ReflectionBasedAbstractFactory::class,
+            \Monarc\Sign\Validator\InputValidator\Signature\PostSignatureCallbackInputValidator::class => \Monarc\Sign\Validator\InputValidator\Signature\SignatureInputValidatorFactory::class,
+            \Monarc\Sign\Validator\InputValidator\Signature\PostUploadSignedDocumentInputValidator::class => \Monarc\Sign\Validator\InputValidator\Signature\SignatureInputValidatorFactory::class,
+            \Monarc\Sign\Validator\InputValidator\Signature\GetReauthUrlInputValidator::class => \Monarc\Sign\Validator\InputValidator\Signature\SignatureInputValidatorFactory::class,
         ],
     ],
     'controllers' => [
         'factories' => [
-            \Monarc\Extension\Controller\SsoAuthenticationController::class => \Monarc\Extension\Controller\SsoAuthenticationControllerFactory::class,
-            \Monarc\Extension\Controller\ApiUsersIdentityController::class => \Monarc\Extension\Controller\ApiUsersIdentityControllerFactory::class,
-            \Monarc\Extension\Controller\ApiIdentityProvidersController::class => \Monarc\Extension\Controller\ApiIdentityProvidersControllerFactory::class,
+            \Monarc\Sign\Controller\Signature\ApiSignatureRequestsController::class => \Monarc\Sign\Controller\Signature\ApiSignatureRequestsControllerFactory::class,
+            \Monarc\Sign\Controller\Signature\ApiSignController::class => \Monarc\Sign\Controller\Signature\ApiSignControllerFactory::class,
         ],
     ],
     'router' => [
         'routes' => [
-            // Routes publiques d'authentification SSO
-            'auth_sso_redirect' => [
-                'type' => 'Literal',
+            'monarc_api_signature_requests' => [
+                'type' => 'Segment',
                 'options' => [
-                    'route' => '/auth/sso/redirect',
+                    'route' => '/api/anrs/:anrId/signature-requests[/:id]',
+                    'constraints' => [
+                        'anrId' => '[0-9]+',
+                        'id' => '[0-9]+',
+                    ],
                     'defaults' => [
-                        'controller' => \Monarc\Extension\Controller\SsoAuthenticationController::class,
-                        'action' => 'redirect',
+                        'controller' => \Monarc\Sign\Controller\Signature\ApiSignatureRequestsController::class,
                     ],
                 ],
             ],
-            'auth_sso_callback' => [
-                'type' => 'Literal',
+            'monarc_api_signature_pdf' => [
+                'type' => 'Segment',
                 'options' => [
-                    'route' => '/auth/sso/callback',
+                    'route' => '/api/signature-requests/:id/pdf',
+                    'constraints' => [
+                        'id' => '[0-9]+',
+                    ],
                     'defaults' => [
-                        'controller' => \Monarc\Extension\Controller\SsoAuthenticationController::class,
+                        'controller' => \Monarc\Sign\Controller\Signature\ApiSignController::class,
+                        'action' => 'pdf',
+                    ],
+                ],
+            ],
+            'monarc_api_sign_process' => [
+                'type' => 'Segment',
+                'options' => [
+                    'route' => '/api/signature-requests/:id/sign',
+                    'constraints' => [
+                        'id' => '[0-9]+',
+                    ],
+                    'defaults' => [
+                        'controller' => \Monarc\Sign\Controller\Signature\ApiSignController::class,
+                        'action' => 'sign',
+                    ],
+                ],
+            ],
+            'monarc_api_sign_check_token' => [
+                'type' => 'Segment',
+                'options' => [
+                    'route' => '/api/signature-requests/:id/check-token',
+                    'constraints' => [
+                        'id' => '[0-9]+',
+                    ],
+                    'defaults' => [
+                        'controller' => \Monarc\Sign\Controller\Signature\ApiSignController::class,
+                        'action' => 'checkToken',
+                    ],
+                ],
+            ],
+            'monarc_api_sign_reject' => [
+                'type' => 'Segment',
+                'options' => [
+                    'route' => '/api/signature-requests/:id/reject',
+                    'constraints' => [
+                        'id' => '[0-9]+',
+                    ],
+                    'defaults' => [
+                        'controller' => \Monarc\Sign\Controller\Signature\ApiSignController::class,
+                        'action' => 'reject',
+                    ],
+                ],
+            ],
+            'monarc_api_sign_upload_signed' => [
+                'type' => 'Segment',
+                'options' => [
+                    'route' => '/api/signature-requests/:id/upload-signed',
+                    'constraints' => [
+                        'id' => '[0-9]+',
+                    ],
+                    'defaults' => [
+                        'controller' => \Monarc\Sign\Controller\Signature\ApiSignController::class,
+                        'action' => 'uploadSigned',
+                    ],
+                ],
+            ],
+            'monarc_api_signature_callback' => [
+                'type' => 'Segment',
+                'options' => [
+                    'route' => '/api/signature-requests/:id/callback',
+                    'constraints' => [
+                        'id' => '[0-9]+',
+                    ],
+                    'defaults' => [
+                        'controller' => \Monarc\Sign\Controller\Signature\ApiSignController::class,
                         'action' => 'callback',
                     ],
                 ],
             ],
-            // Routes API REST d'administration de l'identité numérique
-            'monarc_api_admin_user_identity' => [
+            'monarc_api_signature_reauth_url' => [
                 'type' => 'Segment',
                 'options' => [
-                    'route' => '/api/users/:userId/identity[/:id]',
+                    'route' => '/api/signature-requests/:id/reauth-url',
                     'constraints' => [
-                        'userId' => '[0-9]+',
                         'id' => '[0-9]+',
                     ],
                     'defaults' => [
-                        'controller' => \Monarc\Extension\Controller\ApiUsersIdentityController::class,
+                        'controller' => \Monarc\Sign\Controller\Signature\ApiSignController::class,
+                        'action' => 'reauthUrl',
                     ],
                 ],
             ],
-            'monarc_api_admin_identity_providers' => [
+            'monarc_api_signature_refresh_tx_token' => [
                 'type' => 'Segment',
                 'options' => [
-                    'route' => '/api/identity-providers[/:id]',
+                    'route' => '/api/signature-requests/:id/refresh-tx-token',
                     'constraints' => [
                         'id' => '[0-9]+',
                     ],
                     'defaults' => [
-                        'controller' => \Monarc\Extension\Controller\ApiIdentityProvidersController::class,
+                        'controller' => \Monarc\Sign\Controller\Signature\ApiSignController::class,
+                        'action' => 'refreshTxToken',
                     ],
                 ],
             ],
         ],
     ],
     'permissions' => [
-        'auth_sso_redirect',
-        'auth_sso_callback',
-        'monarc_api_admin_identity_providers',
+        'monarc_api_signature_callback',
+        'monarc_api_signature_pdf',
+        'monarc_api_sign_upload_signed',
+        'monarc_api_signature_refresh_tx_token',
     ],
     'roles' => [
         UserRole::SUPER_ADMIN_FO => [
-            'monarc_api_admin_user_identity',
-            'monarc_api_admin_identity_providers',
+            'monarc_api_signature_requests',
+            'monarc_api_signature_pdf',
+            'monarc_api_sign_process',
+            'monarc_api_sign_check_token',
+            'monarc_api_sign_reject',
+            'monarc_api_sign_upload_signed',
+            'monarc_api_signature_reauth_url',
+            'monarc_api_signature_refresh_tx_token',
+        ],
+        UserRole::USER_FO => [
+            'monarc_api_signature_requests',
+            'monarc_api_signature_pdf',
+            'monarc_api_sign_process',
+            'monarc_api_sign_check_token',
+            'monarc_api_sign_reject',
+            'monarc_api_sign_upload_signed',
+            'monarc_api_signature_reauth_url',
+            'monarc_api_signature_refresh_tx_token',
         ],
     ],
 ];

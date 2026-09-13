@@ -1,11 +1,11 @@
 {
-    "name": "monarc/extension",
-    "description": "Extension module for MONARC",
+    "name": "monarc/sign",
+    "description": "Electronic signature module for MONARC",
     "license": "AGPL-3.0-or-later",
     "type": "library",
     "autoload": {
         "psr-4": {
-            "Monarc\\Extension\\": "src/"
+            "Monarc\\Sign\\": "src/"
         }
     }
 }
