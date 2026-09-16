@@ -115,10 +115,17 @@ class ApiSignController extends AbstractActionController
         $oauthCode    = $params['code']   ?? null;
         $signerProcessId = $params['signer_process_id'] ?? $params['processId'] ?? null;
 
-        $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-        $host   = $_SERVER['HTTP_HOST'] ?? 'localhost:5001';
-        // Ce redirect_uri DOIT être identique au finish_callback_url envoyé à TrustedX
-        $callbackRedirectUri = "{$scheme}://{$host}/api/signature-requests/{$requestId}/callback";
+        // $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+        // $host   = $_SERVER['HTTP_HOST'] ?? 'localhost:5001';
+        // // Ce redirect_uri DOIT être identique au finish_callback_url envoyé à TrustedX
+        // $callbackRedirectUri = "{$scheme}://{$host}/api/signature-requests/{$requestId}/callback";
+
+
+        $scheme = (!empty($_SERVER['HTTP_X_FORWARDED_PROTO'])) ? $_SERVER['HTTP_X_FORWARDED_PROTO'] : ((!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http');
+        $host   = $_SERVER['HTTP_X_FORWARDED_HOST'] ?? $_SERVER['HTTP_HOST'] ?? 'localhost:5001';
+        $prefix = !empty($_SERVER['HTTP_X_FORWARDED_PREFIX']) ? '/' . trim((string)$_SERVER['HTTP_X_FORWARDED_PREFIX'], '/') : '';
+
+        $callbackRedirectUri = "{$scheme}://{$host}{$prefix}/api/signature-requests/{$requestId}/callback";
 
         // NB : le finish_callback_url de TrustedX n'est PAS un redirect_uri OAuth2 ; TrustedX n'y
         // ajoute jamais de "code". Un "code" absent sur ce 1er retour est donc normal et attendu.
@@ -186,9 +193,10 @@ class ApiSignController extends AbstractActionController
         $requestId = (int)$this->params()->fromRoute('id');
         $code      = $this->params()->fromQuery('code');
 
-        $scheme      = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-        $host        = $_SERVER['HTTP_HOST'] ?? 'localhost:5001';
-        $redirectUri = "{$scheme}://{$host}/api/signature-requests/{$requestId}/refresh-tx-token";
+        $scheme      = (!empty($_SERVER['HTTP_X_FORWARDED_PROTO'])) ? $_SERVER['HTTP_X_FORWARDED_PROTO'] : ((!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http');
+        $host        = $_SERVER['HTTP_X_FORWARDED_HOST'] ?? $_SERVER['HTTP_HOST'] ?? 'localhost:5001';
+        $prefix      = !empty($_SERVER['HTTP_X_FORWARDED_PREFIX']) ? '/' . trim((string)$_SERVER['HTTP_X_FORWARDED_PREFIX'], '/') : '';
+        $redirectUri = "{$scheme}://{$host}{$prefix}/api/signature-requests/{$requestId}/refresh-tx-token";
 
         $request = $requestId > 0 ? $this->signatureProcessService->getRequestById($requestId) : null;
         $anrId   = ($request && $request->getAnr()) ? $request->getAnr()->getId() : 1;

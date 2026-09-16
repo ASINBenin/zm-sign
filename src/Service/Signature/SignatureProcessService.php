@@ -65,9 +65,15 @@ class SignatureProcessService
 
         // 3. Construction et validation stricte de l'URL de callback pour TrustedX
         $appUrl = getenv('APP_URL') ?: null;
-        if (empty($appUrl) && !empty($_SERVER['HTTP_HOST'])) {
-            $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-            $appUrl = "{$scheme}://{$_SERVER['HTTP_HOST']}";
+        // if (empty($appUrl) && !empty($_SERVER['HTTP_HOST'])) {
+        //     $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+        //     $appUrl = "{$scheme}://{$_SERVER['HTTP_HOST']}";
+
+        if (empty($appUrl) && (!empty($_SERVER['HTTP_HOST']) || !empty($_SERVER['HTTP_X_FORWARDED_HOST']))) {
+            $scheme = (!empty($_SERVER['HTTP_X_FORWARDED_PROTO'])) ? $_SERVER['HTTP_X_FORWARDED_PROTO'] : ((!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http');
+            $host   = $_SERVER['HTTP_X_FORWARDED_HOST'] ?? $_SERVER['HTTP_HOST'] ?? 'localhost:5001';
+            $prefix = !empty($_SERVER['HTTP_X_FORWARDED_PREFIX']) ? '/' . trim((string)$_SERVER['HTTP_X_FORWARDED_PREFIX'], '/') : '';
+            $appUrl = "{$scheme}://{$host}{$prefix}";
         }
 
         if (empty($appUrl)) {
@@ -431,9 +437,14 @@ class SignatureProcessService
     public function getReauthUrl(int $requestId): string
     {
         // Données déjà validées par GetReauthUrlInputValidator
-        $scheme      = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-        $host        = $_SERVER['HTTP_HOST'] ?? 'localhost:5001';
-        $callbackUri = "{$scheme}://{$host}/api/signature-requests/{$requestId}/callback";
+        // $scheme      = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+        // $host        = $_SERVER['HTTP_HOST'] ?? 'localhost:5001';
+        // $callbackUri = "{$scheme}://{$host}/api/signature-requests/{$requestId}/callback";
+
+        $scheme      = (!empty($_SERVER['HTTP_X_FORWARDED_PROTO'])) ? $_SERVER['HTTP_X_FORWARDED_PROTO'] : ((!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http');
+        $host        = $_SERVER['HTTP_X_FORWARDED_HOST'] ?? $_SERVER['HTTP_HOST'] ?? 'localhost:5001';
+        $prefix      = !empty($_SERVER['HTTP_X_FORWARDED_PREFIX']) ? '/' . trim((string)$_SERVER['HTTP_X_FORWARDED_PREFIX'], '/') : '';
+        $callbackUri = "{$scheme}://{$host}{$prefix}/api/signature-requests/{$requestId}/callback";
 
         return $this->identityService->getAuthorizationUrlWithCustomRedirect('trustedx_pki', $callbackUri);
     }
@@ -482,9 +493,15 @@ class SignatureProcessService
      */
     private function buildRefreshTokenAuthUrl(int $requestId): string
     {
-        $scheme      = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-        $host        = $_SERVER['HTTP_HOST'] ?? 'localhost:5001';
-        $callbackUri = "{$scheme}://{$host}/api/signature-requests/{$requestId}/refresh-tx-token";
+        // $scheme      = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+        // $host        = $_SERVER['HTTP_HOST'] ?? 'localhost:5001';
+        // $callbackUri = "{$scheme}://{$host}/api/signature-requests/{$requestId}/refresh-tx-token";
+
+        $scheme      = (!empty($_SERVER['HTTP_X_FORWARDED_PROTO'])) ? $_SERVER['HTTP_X_FORWARDED_PROTO'] : ((!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http');
+        $host        = $_SERVER['HTTP_X_FORWARDED_HOST'] ?? $_SERVER['HTTP_HOST'] ?? 'localhost:5001';
+        $prefix      = !empty($_SERVER['HTTP_X_FORWARDED_PREFIX']) ? '/' . trim((string)$_SERVER['HTTP_X_FORWARDED_PREFIX'], '/') : '';
+        $callbackUri = "{$scheme}://{$host}{$prefix}/api/signature-requests/{$requestId}/refresh-tx-token";
+
 
         return $this->identityService->getAuthorizationUrlWithCustomRedirect('trustedx_pki', $callbackUri);
     }
