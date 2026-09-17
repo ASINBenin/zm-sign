@@ -143,18 +143,18 @@ class ApiSignController extends AbstractActionController
                 try {
                     $res = $this->signatureProcessService->finalizeWithStoredToken($requestId, $signerProcessId);
                     if (!empty($res['finalized'])) {
-                        return $this->redirect()->toUrl("/#/client/project/{$anrId}/anr/signature-process/{$requestId}?signatureSuccess=1");
+                        return $this->redirect()->toUrl("{$prefix}/#/client/project/{$anrId}/anr/signature-process/{$requestId}?signatureSuccess=1");
                     }
                 } catch (\Throwable $e) {
                     // finalisation immédiate impossible, on repli sur la ré-autorisation OAuth2
                 }
                 // 2) Repli : la page callback front déclenche la ré-autorisation OAuth2 (token frais).
-                return $this->redirect()->toUrl("/#/client/project/{$anrId}/anr/signature-callback/{$requestId}?status=finished");
+                return $this->redirect()->toUrl("{$prefix}/#/client/project/{$anrId}/anr/signature-callback/{$requestId}?status=finished");
             }
 
             // Annulation ou échec côté TrustedX
             $safeStatus = urlencode($normalizedStatus);
-            return $this->redirect()->toUrl("/#/client/project/{$anrId}/anr/signature-callback/{$requestId}?status={$safeStatus}");
+            return $this->redirect()->toUrl("{$prefix}/#/client/project/{$anrId}/anr/signature-callback/{$requestId}?status={$safeStatus}");
         }
 
         // ── CAS 2 : Code OAuth2 reçu (2ème round-trip après ré-autorisation) ────────────────
@@ -171,16 +171,16 @@ class ApiSignController extends AbstractActionController
                     $callbackRedirectUri
                 );
 
-                return $this->redirect()->toUrl("/#/client/project/{$anrId}/anr/signature-process/{$requestId}?signatureSuccess=1");
+                return $this->redirect()->toUrl("{$prefix}/#/client/project/{$anrId}/anr/signature-process/{$requestId}?signatureSuccess=1");
 
             } catch (\Throwable $e) {
                 $msg = urlencode($e->getMessage());
-                return $this->redirect()->toUrl("/#/client/project/{$anrId}/anr/signature-process/{$requestId}?signatureError={$msg}");
+                return $this->redirect()->toUrl("{$prefix}/#/client/project/{$anrId}/anr/signature-process/{$requestId}?signatureError={$msg}");
             }
         }
 
         // ── Fallback ─────────────────────────────────────────────────────────────────────────
-        return $this->redirect()->toUrl("/#/client/project/{$anrId}/anr/signature-process/{$requestId}?signatureError=" . urlencode("Paramètres de callback invalides."));
+        return $this->redirect()->toUrl("{$prefix}/#/client/project/{$anrId}/anr/signature-process/{$requestId}?signatureError=" . urlencode("Paramètres de callback invalides."));
     }
 
     /**
@@ -202,15 +202,15 @@ class ApiSignController extends AbstractActionController
         $anrId   = ($request && $request->getAnr()) ? $request->getAnr()->getId() : 1;
 
         if (empty($code)) {
-            return $this->redirect()->toUrl("/#/client/project/{$anrId}/anr/signature-process/{$requestId}?signatureError=" . urlencode("Code OAuth2 manquant."));
+            return $this->redirect()->toUrl("{$prefix}/#/client/project/{$anrId}/anr/signature-process/{$requestId}?signatureError=" . urlencode("Code OAuth2 manquant."));
         }
 
         try {
             $this->signatureProcessService->refreshTxToken($requestId, $code, $redirectUri);
-            return $this->redirect()->toUrl("/#/client/project/{$anrId}/anr/signature-process/{$requestId}");
+            return $this->redirect()->toUrl("{$prefix}/#/client/project/{$anrId}/anr/signature-process/{$requestId}");
         } catch (\Throwable $e) {
             $msg = urlencode($e->getMessage());
-            return $this->redirect()->toUrl("/#/client/project/{$anrId}/anr/signature-process/{$requestId}?signatureError={$msg}");
+            return $this->redirect()->toUrl("{$prefix}/#/client/project/{$anrId}/anr/signature-process/{$requestId}?signatureError={$msg}");
         }
     }
 
