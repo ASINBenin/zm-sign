@@ -401,7 +401,7 @@ class SignatureRequestService
             $signatory->setStatus(Signatory::STATUS_PENDING);
             $signatory->setPageNumber((int)($sigData['page'] ?? 1));
             $signatory->setCoordX((float)($sigData['x'] ?? 100));
-            $signatory->setCoordY((float)($sigData['y'] ?? 150));
+            $signatory->setCoordY((float)($sigData['y'] ?? 700));
             $signatory->setWidth((float)($sigData['width'] ?? 180));
             $signatory->setHeight((float)($sigData['height'] ?? 60));
 
