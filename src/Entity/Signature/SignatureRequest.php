@@ -22,13 +22,11 @@ class SignatureRequest
     use CreateEntityTrait;
     use UpdateEntityTrait;
 
-    public const STATUS_DRAFT = 'draft';
     public const STATUS_PENDING_CONFIG = 'pending_configuration';
     public const STATUS_PENDING = 'pending';
     public const STATUS_PARTIALLY_SIGNED = 'partially_signed';
     public const STATUS_SIGNED = 'signed';
     public const STATUS_REJECTED = 'rejected';
-    public const STATUS_CANCELLED = 'cancelled';
 
     /**
      * @ORM\Id
@@ -69,9 +67,9 @@ class SignatureRequest
     private ?string $fileSigned = null;
 
     /**
-     * @ORM\Column(type="string", length=50, options={"default": "draft"})
+     * @ORM\Column(type="string", length=50, options={"default": "pending_configuration"})
      */
-    private string $status = self::STATUS_DRAFT;
+    private string $status = self::STATUS_PENDING_CONFIG;
 
     /**
      * @ORM\Column(name="current_step", type="integer", options={"default": 1})
@@ -120,6 +118,11 @@ class SignatureRequest
     public function getStatus(): string { return $this->status; }
     public function setStatus(string $status): self { $this->status = $status; return $this; }
 
+    public function isOpenForSigning(): bool
+    {
+        return in_array($this->status, [self::STATUS_PENDING, self::STATUS_PARTIALLY_SIGNED], true);
+    }
+
     public function getCurrentStep(): int { return $this->currentStep; }
     public function setCurrentStep(int $step): self { $this->currentStep = $step; return $this; }
 
@@ -129,16 +132,6 @@ class SignatureRequest
         if (!$this->signatories->contains($signatory)) {
             $this->signatories->add($signatory);
             $signatory->setRequest($this);
-        }
-        return $this;
-    }
-
-    public function removeSignatory(Signatory $signatory): self
-    {
-        if ($this->signatories->removeElement($signatory)) {
-            if ($signatory->getRequest() === $this) {
-                $signatory->setRequest(null);
-            }
         }
         return $this;
     }

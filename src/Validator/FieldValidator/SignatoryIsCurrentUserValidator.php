@@ -3,19 +3,22 @@
 namespace Monarc\Sign\Validator\FieldValidator;
 
 use Laminas\Validator\AbstractValidator;
+use Monarc\Sign\Entity\Signature\Signatory;
 use Monarc\Sign\Entity\Signature\SignatureRequest;
 
-// Vérifie que l'utilisateur connecté est bien le signataire attendu à l'étape courante
+// Vérifie que la demande est en cours de signature et que l'utilisateur connecté est le signataire de l'étape courante
 class SignatoryIsCurrentUserValidator extends AbstractValidator
 {
-    private const NOT_YOUR_TURN   = 'NOT_YOUR_TURN';
-    private const ALREADY_SIGNED  = 'ALREADY_SIGNED';
-    private const REQUEST_INVALID = 'REQUEST_INVALID';
+    private const NOT_YOUR_TURN    = 'NOT_YOUR_TURN';
+    private const ALREADY_SIGNED   = 'ALREADY_SIGNED';
+    private const REQUEST_INVALID  = 'REQUEST_INVALID';
+    private const REQUEST_CLOSED   = 'REQUEST_CLOSED';
 
     protected $messageTemplates = [
         self::NOT_YOUR_TURN   => "Ce n'est pas votre tour de signer ce document.",
         self::ALREADY_SIGNED  => 'Vous avez déjà signé ce document.',
         self::REQUEST_INVALID => 'Demande de signature introuvable ou invalide.',
+        self::REQUEST_CLOSED  => "Cette demande de signature n'est pas en cours de signature.",
     ];
 
     public function isValid($value): bool
@@ -32,16 +35,20 @@ class SignatoryIsCurrentUserValidator extends AbstractValidator
             return false;
         }
 
-        $currentStep = $request->getCurrentStep();
-        $signatory   = $request->getSignatoryByOrder($currentStep);
+        $signatory = $request->getSignatoryByOrder($request->getCurrentStep());
 
         if (!$signatory || $signatory->getUser()->getId() !== $userId) {
             $this->error(self::NOT_YOUR_TURN);
             return false;
         }
 
-        if ($signatory->getStatus() === \Monarc\Sign\Entity\Signature\Signatory::STATUS_SIGNED) {
+        if ($signatory->getStatus() === Signatory::STATUS_SIGNED) {
             $this->error(self::ALREADY_SIGNED);
+            return false;
+        }
+
+        if (!$request->isOpenForSigning() || $signatory->getStatus() !== Signatory::STATUS_PENDING) {
+            $this->error(self::REQUEST_CLOSED);
             return false;
         }
 

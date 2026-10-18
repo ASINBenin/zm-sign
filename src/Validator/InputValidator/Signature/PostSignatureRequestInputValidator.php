@@ -20,7 +20,7 @@ class PostSignatureRequestInputValidator extends AbstractInputValidator
     {
         return [
             [
-                'name'      => 'anrId',
+                'name'      => 'deliverableDocType',
                 'required'  => true,
                 'filters'   => [['name' => ToInt::class]],
                 'validators' => [
@@ -29,12 +29,6 @@ class PostSignatureRequestInputValidator extends AbstractInputValidator
                         'options' => ['min' => 0, 'inclusive' => false],
                     ],
                 ],
-            ],
-            [
-                'name'      => 'deliverableId',
-                'required'  => false,
-                'filters'   => [['name' => ToInt::class]],
-                'validators' => [],
             ],
             [
                 'name'       => 'signatories',

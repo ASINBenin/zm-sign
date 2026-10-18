@@ -14,32 +14,27 @@ use Monarc\FrontOffice\Service\DeliverableGenerationService;
 class SignatureRequestService
 {
     private EntityManager $em;
-    private ?DeliverableGenerationService $deliverableService;
-    private string $storageDir;
+    private DeliverableGenerationService $deliverableService;
+    private SignatureFileStorage $fileStorage;
 
     public function __construct(
         EntityManager $em,
-        array $config,
-        ?DeliverableGenerationService $deliverableService = null
+        DeliverableGenerationService $deliverableService,
+        SignatureFileStorage $fileStorage
     ) {
         $this->em = $em;
         $this->deliverableService = $deliverableService;
-        $this->storageDir = './data/signatures';
+        $this->fileStorage = $fileStorage;
     }
 
     /**
      * Récupère la liste formatée (DTO) des demandes pour l'API REST
      */
-    public function getFormattedRequestsByAnrId(int $anrId): array
+    public function getFormattedRequestsByAnr(Anr $anr): array
     {
-        if ($anrId <= 0) {
-            throw new Exception("Identifiant ANR obligatoire.", 400);
-        }
-
-        $requests = $this->getRequestsByAnrId($anrId);
         $result = [];
 
-        foreach ($requests as $req) {
+        foreach ($this->getRequestsByAnr($anr) as $req) {
             $signatories = [];
             foreach ($req->getSignatories() as $sig) {
                 $user = $sig->getUser();
@@ -68,7 +63,7 @@ class SignatureRequestService
         }
 
         return [
-            'anrId'    => $anrId,
+            'anrId'    => $anr->getId(),
             'requests' => $result,
         ];
     }
@@ -76,12 +71,9 @@ class SignatureRequestService
     /**
      * Récupère les détails formatés (DTO) d'une demande pour l'API REST
      */
-    public function getFormattedRequestById(int $id): array
+    public function getFormattedRequestById(Anr $anr, int $id): array
     {
-        $request = $this->getRequestById($id);
-        if (!$request) {
-            throw new Exception("Demande de signature introuvable.", 404);
-        }
+        $request = $this->getRequestForAnr($anr, $id);
 
         $signatories = [];
         foreach ($request->getSignatories() as $sig) {
@@ -118,22 +110,14 @@ class SignatureRequestService
     /**
      * Crée une demande à partir des données de livrable ou de formulaire
      */
-    public function createFromDeliverableData(int $anrId, array $data, ?UserSuperClass $connectedUser = null): array
+    public function createFromDeliverableData(Anr $anr, array $data, UserSuperClass $connectedUser): array
     {
-        if ($anrId <= 0) {
-            throw new Exception("Identifiant ANR obligatoire.", 400);
-        }
-
-        $docType = (int)($data['deliverableDocType'] ?? 0);
-        if ($docType <= 0) {
-            throw new Exception("Type de livrable obligatoire pour créer une demande de signature.", 400);
-        }
+        $docType = (int)$data['deliverableDocType'];
         $title = !empty($data['title']) ? trim((string)$data['title']) : "Livrable type {$docType}";
-        $tempPath = (string)($data['tempPdfPath'] ?? '');
         $signatories = (array)($data['signatories'] ?? []);
 
         // Si aucun signataire n'est passé, ajouter l'utilisateur connecté en 1er signataire
-        if (empty($signatories) && $connectedUser) {
+        if (empty($signatories)) {
             $signatories[] = [
                 'userId' => $connectedUser->getId(),
                 'order'  => 1,
@@ -145,31 +129,17 @@ class SignatureRequestService
             ];
         }
 
-        // Génération automatique du PDF si livrable
-        if ($this->deliverableService && $anrId > 0 && empty($tempPath)) {
-            try {
-                $anr = $this->getAnrById($anrId);
-                if ($anr) {
-                    $deliverableParams = $data;
-                    $deliverableParams['typedoc'] = $docType;
-                    $deliverableParams['format'] = 'pdf';
-                    $generated = $this->deliverableService->generateDeliverableWithValues($anr, $docType, $deliverableParams);
-                    if (!empty($generated['path']) && file_exists($generated['path'])) {
-                        $tempPath = $generated['path'];
-                    }
-                }
-            } catch (\Throwable $e) {
-                // Ignore et laisse createSignatureRequest valider la présence du fichier
-            }
-        }
+        $deliverableParams = $data;
+        $deliverableParams['typedoc'] = $docType;
+        $deliverableParams['format'] = 'pdf';
+        $generated = $this->deliverableService->generateDeliverableWithValues($anr, $docType, $deliverableParams);
 
         $request = $this->createSignatureRequest(
-            null,
+            $anr,
             $docType,
             $title,
-            $tempPath,
+            (string)($generated['path'] ?? ''),
             $signatories,
-            $anrId,
             $connectedUser
         );
 
@@ -183,12 +153,9 @@ class SignatureRequestService
     /**
      * Met à jour la liste et le positionnement des signataires pour une demande
      */
-    public function updateSignatories(int $requestId, array $signatoriesData): SignatureRequest
+    public function updateSignatories(Anr $anr, int $requestId, array $signatoriesData): SignatureRequest
     {
-        $request = $this->getRequestById($requestId);
-        if (!$request) {
-            throw new Exception("Demande de signature introuvable.", 404);
-        }
+        $request = $this->getRequestForAnr($anr, $requestId);
 
         $hasAlreadyStarted = ($request->getCurrentStep() > 1)
             || in_array($request->getStatus(), [SignatureRequest::STATUS_PARTIALLY_SIGNED, SignatureRequest::STATUS_SIGNED], true);
@@ -229,28 +196,19 @@ class SignatureRequestService
     /**
      * Supprime une demande de signature si elle n'a pas encore été signée
      */
-    public function deleteSignatureRequest(int $requestId, ?UserSuperClass $user = null): array
+    public function deleteSignatureRequest(Anr $anr, int $requestId): array
     {
-        $request = $this->getRequestById($requestId);
-        if (!$request) {
-            throw new Exception("Demande de signature introuvable.", 404);
-        }
+        $request = $this->getRequestForAnr($anr, $requestId);
 
         if ($request->getStatus() === SignatureRequest::STATUS_SIGNED || $request->getStatus() === SignatureRequest::STATUS_PARTIALLY_SIGNED) {
-            throw new Exception("Impossible de supprimer une demande de signature déjà signée ou en cours de signature.", 400);
+            throw new Exception("Impossible de supprimer une demande de signature déjà signée ou en cours de signature.", 412);
         }
 
-        $filesToDelete = array_filter([
+        $this->fileStorage->deleteFiles([
             $request->getFileOriginal(),
             $request->getFileCurrent(),
             $request->getFileSigned(),
         ]);
-
-        foreach ($filesToDelete as $file) {
-            if (file_exists($file)) {
-                @unlink($file);
-            }
-        }
 
         $this->em->remove($request);
         $this->em->flush();
@@ -263,30 +221,28 @@ class SignatureRequestService
 
     // Helpers internes réutilisés par les méthodes ci-dessus
 
-    private function getRequestById(int $id): ?SignatureRequest
+    private function getRequestForAnr(Anr $anr, int $id): SignatureRequest
     {
-        return $this->em->getRepository(SignatureRequest::class)->find($id);
-    }
+        $request = $this->em->getRepository(SignatureRequest::class)->findOneBy(['id' => $id, 'anr' => $anr]);
+        if ($request === null) {
+            throw new Exception("Demande de signature introuvable.", 404);
+        }
 
-    private function getAnrById(int $anrId): ?Anr
-    {
-        return $this->em->getRepository(Anr::class)->find($anrId);
+        return $request;
     }
 
     /**
-     * Récupère toutes les demandes de signature associées à une ANR
-     *
      * @return SignatureRequest[]
      */
-    private function getRequestsByAnrId(int $anrId): array
+    private function getRequestsByAnr(Anr $anr): array
     {
         $qb = $this->em->createQueryBuilder();
         $qb->select('sr', 's', 'u')
            ->from(SignatureRequest::class, 'sr')
            ->leftJoin('sr.signatories', 's')
            ->leftJoin('s.user', 'u')
-           ->where('sr.anr = :anrId')
-           ->setParameter('anrId', $anrId)
+           ->where('sr.anr = :anr')
+           ->setParameter('anr', $anr)
            ->orderBy('sr.createdAt', 'DESC')
            ->addOrderBy('s.orderIndex', 'ASC');
 
@@ -297,50 +253,29 @@ class SignatureRequestService
      * Crée une demande de signature à partir d'un fichier PDF généré
      */
     private function createSignatureRequest(
-        ?Anr $anr,
+        Anr $anr,
         int $deliverableDocType,
         string $title,
         string $sourcePdfPath,
         array $signatoriesData,
-        int $anrId = 0,
-        ?UserSuperClass $creator = null
+        UserSuperClass $creator
     ): SignatureRequest {
-        $this->ensureStorageDirectories();
-
-        if (!$anr && $anrId > 0) {
-            $anr = $this->getAnrById($anrId);
+        if ($sourcePdfPath === '' || !file_exists($sourcePdfPath)) {
+            throw new Exception("Le fichier source du livrable PDF est introuvable pour initialiser la signature.", 412);
         }
 
-        if (!$anr) {
-            throw new Exception("Analyse de risques introuvable pour cette demande de signature.", 404);
-        }
-
-        if (empty($sourcePdfPath) || !file_exists($sourcePdfPath)) {
-            throw new Exception("Le fichier source du livrable PDF est introuvable pour initialiser la signature.", 400);
-        }
-
-        $requestIdUniq = uniqid('sig_');
-        $filenameOriginal = $requestIdUniq . '_original.pdf';
-        $filenameCurrent  = $requestIdUniq . '_current.pdf';
-
-        $destOriginal = $this->storageDir . '/original/' . $filenameOriginal;
-        $destCurrent  = $this->storageDir . '/current/' . $filenameCurrent;
-
-        copy($sourcePdfPath, $destOriginal);
-        copy($sourcePdfPath, $destCurrent);
+        $files = $this->fileStorage->importSourcePdf($sourcePdfPath);
 
         $signatureRequest = new SignatureRequest();
         $signatureRequest->setAnr($anr);
         $signatureRequest->setDeliverableDocType($deliverableDocType);
         $signatureRequest->setTitle($title);
-        $signatureRequest->setFileOriginal($destOriginal);
-        $signatureRequest->setFileCurrent($destCurrent);
+        $signatureRequest->setFileOriginal($files['original']);
+        $signatureRequest->setFileCurrent($files['current']);
         $signatureRequest->setStatus(SignatureRequest::STATUS_PENDING_CONFIG);
         $signatureRequest->setCurrentStep(1);
 
-        if ($creator && method_exists($creator, 'getEmail')) {
-            $signatureRequest->setCreator($creator->getEmail());
-        }
+        $signatureRequest->setCreator($creator->getEmail());
 
         $this->applySignatoriesData($signatureRequest, $signatoriesData);
 
@@ -351,7 +286,7 @@ class SignatureRequestService
     }
 
     /**
-     * Formate une date avec le fuseau horaire de l'application
+     * Formate une date pour l'affichage, au fuseau du Bénin (les dates sont stockées au fuseau PHP de l'application)
      */
     private function formatDateTime(?\DateTime $dateTime): ?string
     {
@@ -366,38 +301,32 @@ class SignatureRequestService
     }
 
     /**
-     * Initialise les dossiers de stockage sur le disque
-     */
-    private function ensureStorageDirectories(): void
-    {
-        foreach (['', '/original', '/current'] as $sub) {
-            $dir = $this->storageDir . $sub;
-            if (!is_dir($dir)) {
-                mkdir($dir, 0775, true);
-            }
-        }
-    }
-
-    /**
-     * Construit et attache les signataires à une demande à partir des données brutes du formulaire.
-     * Factorisé entre createSignatureRequest() (création) et updateSignatories() (reconfiguration) :
-     * les deux traitent exactement la même forme de données.
+     * Construit et attache les signataires à une demande à partir des données brutes du formulaire
+     * (création et reconfiguration). L'ordre transmis sert au tri ; il est renuméroté de 1 à n.
      */
     private function applySignatoriesData(SignatureRequest $signatureRequest, array $signatoriesData): void
     {
         $userRepo = $this->em->getRepository(User::class);
-        $order = 1;
+        $signatoriesData = array_values($signatoriesData);
+        uksort($signatoriesData, static fn (int $a, int $b) =>
+            [(int)($signatoriesData[$a]['order'] ?? $a + 1), $a] <=> [(int)($signatoriesData[$b]['order'] ?? $b + 1), $b]);
 
+        $order = 1;
+        $userIds = [];
         foreach ($signatoriesData as $sigData) {
             $userId = (int)($sigData['userId'] ?? ($sigData['user']['id'] ?? 0));
+            if (isset($userIds[$userId])) {
+                throw new Exception("Un même utilisateur ne peut être signataire qu'une seule fois.", 412);
+            }
             $user = $userRepo->find($userId);
             if (!$user) {
-                continue;
+                throw new Exception("Signataire introuvable.", 412);
             }
+            $userIds[$userId] = true;
 
             $signatory = new Signatory();
             $signatory->setUser($user);
-            $signatory->setOrderIndex((int)($sigData['order'] ?? $order));
+            $signatory->setOrderIndex($order);
             $signatory->setStatus(Signatory::STATUS_PENDING);
             $signatory->setPageNumber((int)($sigData['page'] ?? 1));
             $signatory->setCoordX((float)($sigData['x'] ?? 100));

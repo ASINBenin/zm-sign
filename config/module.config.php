@@ -2,7 +2,13 @@
 
 namespace Monarc\Sign;
 
+use Laminas\Mvc\Middleware\PipeSpec;
 use Monarc\FrontOffice\Entity\UserRole;
+use Monarc\FrontOffice\Middleware\AnrValidationMiddleware;
+use Monarc\Sign\Controller\Signature\ApiSignatureRequestsController;
+use Monarc\Sign\Controller\Signature\ApiSignatureRequestsControllerFactory;
+use Monarc\Sign\Controller\Signature\ApiSignController;
+use Monarc\Sign\Controller\Signature\ApiSignControllerFactory;
 
 return [
     'doctrine' => [
@@ -29,8 +35,11 @@ return [
             \Monarc\Sign\Service\Signature\SignatureRequestService::class => \Monarc\Sign\Service\Signature\SignatureRequestServiceFactory::class,
             \Monarc\Sign\Service\Signature\SignatureProcessService::class => \Monarc\Sign\Service\Signature\SignatureProcessServiceFactory::class,
             \Monarc\Sign\Service\Signature\TrustedXSignatureClient::class => \Monarc\Sign\Service\Signature\TrustedXSignatureClientFactory::class,
+            \Monarc\Sign\Service\Signature\SignatureUrlBuilder::class => \Monarc\Sign\Service\Signature\SignatureUrlBuilderFactory::class,
+            \Monarc\Sign\Service\Signature\SignatureFileStorage::class => \Laminas\ServiceManager\Factory\InvokableFactory::class,
+            \Monarc\Sign\Service\Signature\LocalPdfSignatureVerifier::class => \Laminas\ServiceManager\Factory\InvokableFactory::class,
             \Monarc\Sign\Validator\InputValidator\Signature\PostInitiateSignInputValidator::class => \Monarc\Sign\Validator\InputValidator\Signature\SignatureInputValidatorFactory::class,
-            \Monarc\Sign\Validator\InputValidator\Signature\PostRejectSignatureInputValidator::class => \Laminas\ServiceManager\AbstractFactory\ReflectionBasedAbstractFactory::class,
+            \Monarc\Sign\Validator\InputValidator\Signature\PostRejectSignatureInputValidator::class => \Monarc\Sign\Validator\InputValidator\Signature\SignatureInputValidatorFactory::class,
             \Monarc\Sign\Validator\InputValidator\Signature\PostSignatureRequestInputValidator::class => \Laminas\ServiceManager\AbstractFactory\ReflectionBasedAbstractFactory::class,
             \Monarc\Sign\Validator\InputValidator\Signature\PostSignatureCallbackInputValidator::class => \Monarc\Sign\Validator\InputValidator\Signature\SignatureInputValidatorFactory::class,
             \Monarc\Sign\Validator\InputValidator\Signature\PostUploadSignedDocumentInputValidator::class => \Monarc\Sign\Validator\InputValidator\Signature\SignatureInputValidatorFactory::class,
@@ -39,8 +48,8 @@ return [
     ],
     'controllers' => [
         'factories' => [
-            \Monarc\Sign\Controller\Signature\ApiSignatureRequestsController::class => \Monarc\Sign\Controller\Signature\ApiSignatureRequestsControllerFactory::class,
-            \Monarc\Sign\Controller\Signature\ApiSignController::class => \Monarc\Sign\Controller\Signature\ApiSignControllerFactory::class,
+            ApiSignatureRequestsController::class => ApiSignatureRequestsControllerFactory::class,
+            ApiSignController::class => ApiSignControllerFactory::class,
         ],
     ],
     'router' => [
@@ -48,13 +57,17 @@ return [
             'monarc_api_signature_requests' => [
                 'type' => 'Segment',
                 'options' => [
-                    'route' => '/api/anrs/:anrId/signature-requests[/:id]',
+                    'route' => '/api/anrs/:anrid/signature-requests[/:id]',
                     'constraints' => [
-                        'anrId' => '[0-9]+',
+                        'anrid' => '[0-9]+',
                         'id' => '[0-9]+',
                     ],
                     'defaults' => [
-                        'controller' => \Monarc\Sign\Controller\Signature\ApiSignatureRequestsController::class,
+                        'controller' => PipeSpec::class,
+                        'middleware' => new PipeSpec(
+                            AnrValidationMiddleware::class,
+                            ApiSignatureRequestsController::class,
+                        ),
                     ],
                 ],
             ],
@@ -66,7 +79,7 @@ return [
                         'id' => '[0-9]+',
                     ],
                     'defaults' => [
-                        'controller' => \Monarc\Sign\Controller\Signature\ApiSignController::class,
+                        'controller' => ApiSignController::class,
                         'action' => 'pdf',
                     ],
                 ],
@@ -79,7 +92,7 @@ return [
                         'id' => '[0-9]+',
                     ],
                     'defaults' => [
-                        'controller' => \Monarc\Sign\Controller\Signature\ApiSignController::class,
+                        'controller' => ApiSignController::class,
                         'action' => 'sign',
                     ],
                 ],
@@ -92,7 +105,7 @@ return [
                         'id' => '[0-9]+',
                     ],
                     'defaults' => [
-                        'controller' => \Monarc\Sign\Controller\Signature\ApiSignController::class,
+                        'controller' => ApiSignController::class,
                         'action' => 'checkToken',
                     ],
                 ],
@@ -105,7 +118,7 @@ return [
                         'id' => '[0-9]+',
                     ],
                     'defaults' => [
-                        'controller' => \Monarc\Sign\Controller\Signature\ApiSignController::class,
+                        'controller' => ApiSignController::class,
                         'action' => 'reject',
                     ],
                 ],
@@ -118,7 +131,7 @@ return [
                         'id' => '[0-9]+',
                     ],
                     'defaults' => [
-                        'controller' => \Monarc\Sign\Controller\Signature\ApiSignController::class,
+                        'controller' => ApiSignController::class,
                         'action' => 'uploadSigned',
                     ],
                 ],
@@ -131,8 +144,21 @@ return [
                         'id' => '[0-9]+',
                     ],
                     'defaults' => [
-                        'controller' => \Monarc\Sign\Controller\Signature\ApiSignController::class,
+                        'controller' => ApiSignController::class,
                         'action' => 'callback',
+                    ],
+                ],
+            ],
+            'monarc_api_signature_finalize' => [
+                'type' => 'Segment',
+                'options' => [
+                    'route' => '/api/signature-requests/:id/finalize',
+                    'constraints' => [
+                        'id' => '[0-9]+',
+                    ],
+                    'defaults' => [
+                        'controller' => ApiSignController::class,
+                        'action' => 'finalize',
                     ],
                 ],
             ],
@@ -144,7 +170,7 @@ return [
                         'id' => '[0-9]+',
                     ],
                     'defaults' => [
-                        'controller' => \Monarc\Sign\Controller\Signature\ApiSignController::class,
+                        'controller' => ApiSignController::class,
                         'action' => 'reauthUrl',
                     ],
                 ],
@@ -157,7 +183,7 @@ return [
                         'id' => '[0-9]+',
                     ],
                     'defaults' => [
-                        'controller' => \Monarc\Sign\Controller\Signature\ApiSignController::class,
+                        'controller' => ApiSignController::class,
                         'action' => 'refreshTxToken',
                     ],
                 ],
@@ -166,8 +192,6 @@ return [
     ],
     'permissions' => [
         'monarc_api_signature_callback',
-        'monarc_api_signature_pdf',
-        'monarc_api_sign_upload_signed',
         'monarc_api_signature_refresh_tx_token',
     ],
     'roles' => [
@@ -178,6 +202,7 @@ return [
             'monarc_api_sign_check_token',
             'monarc_api_sign_reject',
             'monarc_api_sign_upload_signed',
+            'monarc_api_signature_finalize',
             'monarc_api_signature_reauth_url',
             'monarc_api_signature_refresh_tx_token',
         ],
@@ -188,6 +213,7 @@ return [
             'monarc_api_sign_check_token',
             'monarc_api_sign_reject',
             'monarc_api_sign_upload_signed',
+            'monarc_api_signature_finalize',
             'monarc_api_signature_reauth_url',
             'monarc_api_signature_refresh_tx_token',
         ],

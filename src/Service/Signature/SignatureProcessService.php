@@ -8,26 +8,37 @@ use Monarc\Core\Entity\UserSuperClass;
 use Monarc\Sign\Entity\Signature\Signatory;
 use Monarc\Sign\Entity\Signature\SignatureRequest;
 use Monarc\Core\Service\Sso\IdentityManagementService;
+use Monarc\FrontOffice\Table\UserAnrTable;
 
 class SignatureProcessService
 {
     private EntityManager $em;
     private TrustedXSignatureClient $trustedXClient;
     private IdentityManagementService $identityService;
-    private array $config;
-    private string $storageDir;
+    private UserAnrTable $userAnrTable;
+    private LocalPdfSignatureVerifier $localSignatureVerifier;
+    private SignatureUrlBuilder $urlBuilder;
+    private SignatureFileStorage $fileStorage;
+    private bool $checkLocalSignerNpi;
 
     public function __construct(
         EntityManager $em,
         TrustedXSignatureClient $trustedXClient,
         IdentityManagementService $identityService,
-        array $config
+        UserAnrTable $userAnrTable,
+        LocalPdfSignatureVerifier $localSignatureVerifier,
+        SignatureUrlBuilder $urlBuilder,
+        SignatureFileStorage $fileStorage,
+        bool $checkLocalSignerNpi
     ) {
         $this->em = $em;
         $this->trustedXClient = $trustedXClient;
         $this->identityService = $identityService;
-        $this->config = $config;
-        $this->storageDir = './data/signatures';
+        $this->userAnrTable = $userAnrTable;
+        $this->localSignatureVerifier = $localSignatureVerifier;
+        $this->urlBuilder = $urlBuilder;
+        $this->fileStorage = $fileStorage;
+        $this->checkLocalSignerNpi = $checkLocalSignerNpi;
     }
 
     public function getRequestById(int $id): ?SignatureRequest
@@ -49,7 +60,7 @@ class SignatureProcessService
         if (empty($accessToken)) {
             return [
                 'requireAuth' => true,
-                'authUrl'     => $this->identityService->getAuthorizationUrl('trustedx_pki'),
+                'authUrl'     => $this->urlBuilder->getSsoLoginUrl('trustedx_pki'),
             ];
         }
 
@@ -63,24 +74,8 @@ class SignatureProcessService
             throw new Exception("Le fichier PDF à signer est introuvable sur le serveur.", 500);
         }
 
-        // 3. Construction et validation stricte de l'URL de callback pour TrustedX
-        $appUrl = getenv('APP_URL') ?: null;
-        // if (empty($appUrl) && !empty($_SERVER['HTTP_HOST'])) {
-        //     $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-        //     $appUrl = "{$scheme}://{$_SERVER['HTTP_HOST']}";
-
-        if (empty($appUrl) && (!empty($_SERVER['HTTP_HOST']) || !empty($_SERVER['HTTP_X_FORWARDED_HOST']))) {
-            $scheme = (!empty($_SERVER['HTTP_X_FORWARDED_PROTO'])) ? $_SERVER['HTTP_X_FORWARDED_PROTO'] : ((!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http');
-            $host   = $_SERVER['HTTP_X_FORWARDED_HOST'] ?? $_SERVER['HTTP_HOST'] ?? 'localhost:5001';
-            $prefix = !empty($_SERVER['HTTP_X_FORWARDED_PREFIX']) ? '/' . trim((string)$_SERVER['HTTP_X_FORWARDED_PREFIX'], '/') : '';
-            $appUrl = "{$scheme}://{$host}{$prefix}";
-        }
-
-        if (empty($appUrl)) {
-            throw new Exception("Impossible de déterminer l'URL de l'application pour le callback TrustedX (APP_URL et HTTP_HOST non définis).", 500);
-        }
-
-        $finishCallbackUrl = rtrim($appUrl, '/') . "/api/signature-requests/{$requestId}/callback";
+        // 3. URL de retour TrustedX
+        $finishCallbackUrl = $this->urlBuilder->getApiUrl($requestId, 'callback');
 
         // 4. Extraction des coordonnées et nom du signataire (déjà validés par PostInitiateSignInputValidator)
         $pageNumber = $signatory->getPageNumber();
@@ -157,201 +152,77 @@ class SignatureProcessService
         return [
             'valid'       => false,
             'requireAuth' => true,
-            'authUrl'     => $this->buildRefreshTokenAuthUrl($requestId),
+            'authUrl'     => $this->buildRefreshTokenAuthUrl($request),
         ];
     }
 
     /**
-     * Tentative de finalisation IMMÉDIATE avec le token SSO déjà stocké (sans round-trip OAuth2).
-     * Appelé par le callback TrustedX (status=finished, sans code) : si le token stocké est encore
-     * valide — cas courant quand la signature a été rapide — on télécharge et persiste le PDF signé
-     * tout de suite. Sinon on ne touche À RIEN et on renvoie finalized=false : l'appelant enchaînera
-     * alors sur la ré-autorisation OAuth2 (qui appellera handleSignCallback avec un code frais).
+     * Finalisation avec le token TX déjà stocké, à la demande du signataire connecté (étape validée par
+     * GetReauthUrlInputValidator). Sans token valide ou sans document, rien n'est modifié : finalized=false,
+     * le front enchaîne sur la ré-autorisation OAuth2 (handleSignCallback).
      *
      * @return array{finalized: bool, isCompleted?: bool, nextStep?: int}
      */
-    public function finalizeWithStoredToken(int $requestId, ?string $signerProcessId = null): array
+    public function finalizeWithStoredToken(int $requestId, UserSuperClass $connectedUser): array
     {
-        $request = $this->getRequestById($requestId);
-        if (!$request) {
-            return ['finalized' => false];
-        }
-        $currentStep = $request->getCurrentStep();
-        $signatory   = $request->getSignatoryByOrder($currentStep);
-        if (!$signatory) {
-            return ['finalized' => false];
-        }
+        $request   = $this->getRequestById($requestId);
+        $signatory = $request->getSignatoryByOrder($request->getCurrentStep());
 
-        // Déjà signé (ex. double notification TrustedX) : rien à faire, idempotent.
-        if ($signatory->getStatus() === Signatory::STATUS_SIGNED) {
-            return [
-                'finalized'   => true,
-                'isCompleted' => ($request->getStatus() === SignatureRequest::STATUS_SIGNED),
-                'nextStep'    => $currentStep,
-            ];
-        }
-
-        $accessToken = $this->identityService->getValidAccessTokenForUser($signatory->getUser());
+        $accessToken = $this->identityService->getValidAccessTokenForUser($connectedUser);
         if (empty($accessToken)) {
-            // Aucun effet de bord : l'état reste intact pour la ré-autorisation.
             return ['finalized' => false];
         }
 
-        $storedTxId       = (string)$signatory->getSignatureTxId();
-        $processIdStored  = str_contains($storedTxId, '::') ? explode('::', $storedTxId, 2)[0] : ($storedTxId ?: null);
-        $documentIdStored = str_contains($storedTxId, '::') ? explode('::', $storedTxId, 2)[1] : null;
-        $fetchId          = $documentIdStored ?: ($signerProcessId ?: $processIdStored);
-
-        $signedPdfContent = $this->trustedXClient->downloadSignedDocument($accessToken, (string)$fetchId);
+        [$processId, $documentId] = $this->parseTxId($signatory);
+        $signedPdfContent = $this->trustedXClient->downloadSignedDocument($accessToken, (string)($documentId ?: $processId));
         if (empty($signedPdfContent)) {
             // Échec de téléchargement : on laisse la ré-autorisation prendre le relais.
             return ['finalized' => false];
         }
 
-        $this->ensureStorageDirectories();
-        $newPath = $this->storageDir . '/current/sig_step_' . $currentStep . '_' . uniqid() . '.pdf';
-        file_put_contents($newPath, $signedPdfContent);
+        $result = $this->recordSignedStep($request, $signatory, $signedPdfContent, 'sig');
+        $this->deleteRemoteProcess($accessToken, $processId);
 
-        $request->setFileCurrent($newPath);
-        $signatory->setStatus(Signatory::STATUS_SIGNED);
-        $signatory->setSignedAt(new \DateTime());
-
-        $totalSignatories = $request->getSignatories()->count();
-        if ($currentStep < $totalSignatories) {
-            $request->setCurrentStep($currentStep + 1);
-            $request->setStatus(SignatureRequest::STATUS_PARTIALLY_SIGNED);
-        } else {
-            $request->setStatus(SignatureRequest::STATUS_SIGNED);
-            $request->setFileSigned($newPath);
-        }
-        $this->em->flush();
-
-        $this->deleteRemoteProcess($accessToken, $processIdStored);
-
-        return [
-            'finalized'   => true,
-            'isCompleted' => ($request->getStatus() === SignatureRequest::STATUS_SIGNED),
-            'nextStep'    => $request->getCurrentStep(),
-        ];
+        return ['finalized' => true] + $result;
     }
 
     /**
-     * Traite le callback de retour après signature sur l'interface SafeLayer.
-     * $oauthCode : code OAuth2 reçu de TrustedX dans le finish_callback_url (à préférer au token stocké).
-     * $callbackRedirectUri : URL identique au finish_callback_url envoyé à TrustedX (requis pour l'échange de code).
+     * Retour OAuth2 après ré-autorisation (getReauthUrl) : le state doit correspondre à l'étape en cours.
+     * $callbackRedirectUri doit être identique au redirect_uri envoyé à TrustedX (échange du code).
      */
-    public function handleSignCallback(int $requestId, string $status, ?string $signerProcessId = null, ?string $oauthCode = null, ?string $callbackRedirectUri = null): array
-    {
-        // Données déjà validées par PostSignatureCallbackInputValidator
-        $request     = $this->getRequestById($requestId);
-        $currentStep = $request->getCurrentStep();
-        $signatory   = $request->getSignatoryByOrder($currentStep);
+    public function handleSignCallback(
+        int $requestId,
+        ?string $state,
+        string $oauthCode,
+        string $callbackRedirectUri,
+        ?string $signerProcessId = null
+    ): array {
+        // Existence de la demande et du signataire déjà validée par PostSignatureCallbackInputValidator
+        $request   = $this->getRequestById($requestId);
+        $signatory = $this->getSignatoryMatchingState($request, $state);
 
-        $normalizedStatus = strtolower(trim($status));
-
-        if ($normalizedStatus === 'rejected' || $normalizedStatus === 'cancel') {
-            $signatory->setStatus(Signatory::STATUS_REJECTED);
-            $signatory->setSignedAt(new \DateTime());
-            $request->setStatus(SignatureRequest::STATUS_REJECTED);
-            $this->em->flush();
-
-            return [
-                'success' => false,
-                'status'  => 'rejected',
-                'message' => 'La signature a été annulée ou refusée.',
-            ];
-        }
-
-        if ($normalizedStatus !== 'finished' && $normalizedStatus !== 'finish' && $normalizedStatus !== 'signed') {
-            return [
-                'success' => false,
-                'status'  => $normalizedStatus,
-                'message' => "Statut de signature non finalisé ($normalizedStatus).",
-            ];
-        }
-
-        // Parser le txId stocké : peut être "processId::documentId" ou juste "processId"
-        $storedTxId = $signatory->getSignatureTxId();
-        $processIdStored  = $storedTxId;
-        $documentIdStored = null;
-        if ($storedTxId && str_contains($storedTxId, '::')) {
-            [$processIdStored, $documentIdStored] = explode('::', $storedTxId, 2);
-        }
-
+        [$processIdStored, $documentIdStored] = $this->parseTxId($signatory);
         $processIdToFetch = $signerProcessId ?: $processIdStored;
-        $user = $signatory->getUser();
 
-        // Priorité 1 : échange du code OAuth2 reçu dans le finish_callback_url (token frais garanti)
-        $accessToken = null;
-        if ($oauthCode && $callbackRedirectUri) {
-            $accessToken = $this->identityService->exchangeSignatureCode($oauthCode, $callbackRedirectUri);
+        $accessToken = $this->identityService->exchangeSignatureCode($oauthCode, $callbackRedirectUri)
+            ?? $this->identityService->getValidAccessTokenForUser($signatory->getUser());
+        if ($accessToken === null) {
+            throw new Exception("Impossible d'obtenir un jeton TrustedX pour récupérer le document signé.", 401);
         }
-
-        // Priorité 2 : token SSO stocké en base (peut être expiré)
-        if (!$accessToken) {
-            $accessToken = $this->identityService->getValidAccessTokenForUser($user);
-        }
-
-        if (!$accessToken) {
-            // Enregistrer la signature comme effectuée mais sans le PDF (sera téléchargé au prochain accès)
-            $signatory->setStatus(Signatory::STATUS_SIGNED);
-            $signatory->setSignedAt(new \DateTime());
-
-            $totalSignatories = $request->getSignatories()->count();
-            if ($currentStep < $totalSignatories) {
-                $request->setCurrentStep($currentStep + 1);
-                $request->setStatus(SignatureRequest::STATUS_PARTIALLY_SIGNED);
-            } else {
-                $request->setStatus(SignatureRequest::STATUS_SIGNED);
-            }
-            $this->em->flush();
-
-            return [
-                'success'         => true,
-                'pendingDownload' => true,
-                'isCompleted'     => ($request->getStatus() === SignatureRequest::STATUS_SIGNED),
-                'nextStep'        => $request->getCurrentStep(),
-                'message'         => 'Signature enregistrée. Le PDF signé sera disponible après réauthentification.',
-            ];
-        }
-        // Étape 3 — récupération du document signé : GET .../documents/{documentId}/content
-        // (on privilégie le documentId direct, plus fiable que de repasser par le process).
-        $fetchId = $documentIdStored ?: $processIdToFetch;
-        $signedPdfContent = $this->trustedXClient->downloadSignedDocument($accessToken, $fetchId);
+        // Le documentId direct est plus fiable que de repasser par le process.
+        $signedPdfContent = $this->trustedXClient->downloadSignedDocument(
+            $accessToken,
+            (string)($documentIdStored ?: $processIdToFetch)
+        );
         if (empty($signedPdfContent)) {
             throw new Exception("Le document PDF signé renvoyé par TrustedX est vide.", 500);
         }
 
-        $this->ensureStorageDirectories();
-        $newFilename = 'sig_step_' . $currentStep . '_' . uniqid() . '.pdf';
-        $newPath = $this->storageDir . '/current/' . $newFilename;
-
-        file_put_contents($newPath, $signedPdfContent);
-
-        $request->setFileCurrent($newPath);
-        $signatory->setStatus(Signatory::STATUS_SIGNED);
-        $signatory->setSignedAt(new \DateTime());
-
-        $totalSignatories = $request->getSignatories()->count();
-        if ($currentStep < $totalSignatories) {
-            $request->setCurrentStep($currentStep + 1);
-            $request->setStatus(SignatureRequest::STATUS_PARTIALLY_SIGNED);
-        } else {
-            $request->setStatus(SignatureRequest::STATUS_SIGNED);
-            $request->setFileSigned($newPath);
-        }
-
-        $this->em->flush();
-
-        // Étape 4 — le PDF signé est récupéré et persisté : on supprime le processus côté TrustedX
-        // (non bloquant : un échec ici n'invalide pas la signature déjà enregistrée).
+        $result = $this->recordSignedStep($request, $signatory, $signedPdfContent, 'sig');
+        // Non bloquant : un échec de suppression du processus TrustedX n'invalide pas la signature enregistrée.
         $this->deleteRemoteProcess($accessToken, $processIdStored ?: $processIdToFetch);
 
-        return [
-            'success'     => true,
-            'isCompleted' => ($request->getStatus() === SignatureRequest::STATUS_SIGNED),
-            'nextStep'    => $request->getCurrentStep(),
-        ];
+        return ['success' => true] + $result;
     }
 
     /**
@@ -359,6 +230,7 @@ class SignatureProcessService
      */
     public function rejectSignatureRequest(int $requestId, UserSuperClass $connectedUser, string $reason): SignatureRequest
     {
+        // Données déjà validées par PostRejectSignatureInputValidator
         $request     = $this->getRequestById($requestId);
         $currentStep = $request->getCurrentStep();
         $signatory   = $request->getSignatoryByOrder($currentStep);
@@ -368,15 +240,16 @@ class SignatureProcessService
         $signatory->setSignedAt(new \DateTime());
 
         $request->setStatus(SignatureRequest::STATUS_REJECTED);
+        $request->setRejectionReason($reason);
         $this->em->flush();
 
         // Nettoyage best-effort d'un éventuel processus TrustedX déjà ouvert pour cette étape.
-        $storedTxId = (string)$signatory->getSignatureTxId();
-        if ($storedTxId !== '' && !str_starts_with($storedTxId, 'LOCAL:')) {
-            $processId = str_contains($storedTxId, '::') ? explode('::', $storedTxId, 2)[0] : $storedTxId;
+        // "LOCAL:" : marqueur des anciennes signatures locales, sans processus TrustedX.
+        [$processId] = $this->parseTxId($signatory);
+        if ($processId !== null && !str_starts_with($processId, 'LOCAL:')) {
             try {
                 $this->deleteRemoteProcess($this->identityService->getValidAccessTokenForUser($connectedUser), $processId);
-            } catch (\Throwable $e) {
+            } catch (\Throwable) {
                 // nettoyage best-effort : un échec ici n'invalide pas le refus déjà enregistré
             }
         }
@@ -385,49 +258,24 @@ class SignatureProcessService
     }
 
     /**
-     * Enregistre le PDF signé localement via le pilote USB (BJ eToken Driver)
+     * Enregistre le PDF signé localement via le pilote USB (BJ eToken Driver), après contrôle de la signature ajoutée.
      */
-    public function handleLocalSignedDocument(
-        int $requestId,
-        UserSuperClass $user,
-        string $signedPdfContent,
-        ?string $certificateSubject = null
-    ): array {
+    public function handleLocalSignedDocument(int $requestId, string $signedPdfContent): array
+    {
         // Données déjà validées par PostUploadSignedDocumentInputValidator
-        $request     = $this->getRequestById($requestId);
-        $currentStep = $request->getCurrentStep();
-        $signatory   = $request->getSignatoryByOrder($currentStep);
+        $request   = $this->getRequestById($requestId);
+        $signatory = $request->getSignatoryByOrder($request->getCurrentStep());
 
-        $this->ensureStorageDirectories();
-        $newFilename = 'sig_local_step_' . $currentStep . '_' . uniqid() . '.pdf';
-        $newPath = $this->storageDir . '/current/' . $newFilename;
-
-        file_put_contents($newPath, $signedPdfContent);
-
-        $request->setFileCurrent($newPath);
-        $signatory->setStatus(Signatory::STATUS_SIGNED);
-        $signatory->setSignedAt(new \DateTime());
-
-        if ($certificateSubject) {
-            $signatory->setSignatureTxId("LOCAL:" . $certificateSubject);
+        $signer = $this->localSignatureVerifier->verifyAddedSignature(
+            (string)file_get_contents($request->getFileCurrent()),
+            $signedPdfContent
+        );
+        if ($this->checkLocalSignerNpi) {
+            $this->assertCertificateBelongsToSignatory($signatory, $signer['serialNumber']);
         }
+        $signatory->setCertificateSubject(mb_substr($signer['dn'], 0, 255));
 
-        $totalSignatories = $request->getSignatories()->count();
-        if ($currentStep < $totalSignatories) {
-            $request->setCurrentStep($currentStep + 1);
-            $request->setStatus(SignatureRequest::STATUS_PARTIALLY_SIGNED);
-        } else {
-            $request->setStatus(SignatureRequest::STATUS_SIGNED);
-            $request->setFileSigned($newPath);
-        }
-
-        $this->em->flush();
-
-        return [
-            'success'     => true,
-            'isCompleted' => ($request->getStatus() === SignatureRequest::STATUS_SIGNED),
-            'nextStep'    => $request->getCurrentStep(),
-        ];
+        return ['success' => true] + $this->recordSignedStep($request, $signatory, $signedPdfContent, 'sig_local');
     }
 
     /**
@@ -437,53 +285,33 @@ class SignatureProcessService
     public function getReauthUrl(int $requestId): string
     {
         // Données déjà validées par GetReauthUrlInputValidator
-        // $scheme      = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-        // $host        = $_SERVER['HTTP_HOST'] ?? 'localhost:5001';
-        // $callbackUri = "{$scheme}://{$host}/api/signature-requests/{$requestId}/callback";
+        $request = $this->getRequestById($requestId);
 
-        $scheme      = (!empty($_SERVER['HTTP_X_FORWARDED_PROTO'])) ? $_SERVER['HTTP_X_FORWARDED_PROTO'] : ((!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http');
-        $host        = $_SERVER['HTTP_X_FORWARDED_HOST'] ?? $_SERVER['HTTP_HOST'] ?? 'localhost:5001';
-        $prefix      = !empty($_SERVER['HTTP_X_FORWARDED_PREFIX']) ? '/' . trim((string)$_SERVER['HTTP_X_FORWARDED_PREFIX'], '/') : '';
-        $callbackUri = "{$scheme}://{$host}{$prefix}/api/signature-requests/{$requestId}/callback";
+        $callbackUri = $this->urlBuilder->getApiUrl($requestId, 'callback');
 
-        return $this->identityService->getAuthorizationUrlWithCustomRedirect('trustedx_pki', $callbackUri);
+        return $this->identityService->getAuthorizationUrlWithCustomRedirect(
+            'trustedx_pki',
+            $callbackUri,
+            $this->buildStateContext($request)
+        );
     }
 
     /**
-     * Échange un code OAuth2 TX contre un token frais et le sauvegarde en DB.
-     * Appelé par refreshTxTokenAction après retour du OAuth2 pré-signature.
+     * Échange un code OAuth2 TX contre un token frais et le sauvegarde en DB pour le signataire
+     * de l'étape en cours, désigné par le state signé (route publique : retour navigateur de TrustedX).
      */
-    public function refreshTxToken(int $requestId, string $code, string $redirectUri): void
+    public function refreshTxToken(int $requestId, ?string $state, string $code, string $redirectUri): void
     {
         $request = $this->getRequestById($requestId);
         if (!$request) {
             throw new Exception("Demande de signature introuvable.", 404);
         }
 
-        // L'utilisateur concerné est le signataire de l'étape en cours de CETTE demande —
-        // jamais une session TrustedX prise au hasard en base (ambigu dès qu'il y a plusieurs
-        // utilisateurs actifs sur ce provider).
-        $signatory = $request->getSignatoryByOrder($request->getCurrentStep());
-        if (!$signatory) {
-            throw new Exception("Aucun signataire trouvé pour l'étape en cours de cette demande.", 404);
-        }
+        $signatory = $this->getSignatoryMatchingState($request, $state);
 
         $this->identityService->exchangeAndSaveToken($code, $redirectUri, $signatory->getUser());
     }
 
-    /**
-     * Retourne le chemin sur disque du PDF à afficher/télécharger
-     */
-    public function getPdfFilePath(int $requestId): ?string
-    {
-        $request = $this->getRequestById($requestId);
-        if (!$request) {
-            return null;
-        }
-
-        $filePath = $request->getFileSigned() ?: ($request->getFileCurrent() ?: $request->getFileOriginal());
-        return ($filePath && file_exists($filePath)) ? $filePath : null;
-    }
 
     // Helpers internes réutilisés par les méthodes ci-dessus
 
@@ -491,19 +319,110 @@ class SignatureProcessService
      * Génère une URL OAuth2 TX dont le redirect_uri pointe vers le endpoint refresh-tx-token.
      * Évite le flux SSO complet (fetchUserInfo, session MONARC) — juste l'échange de token.
      */
-    private function buildRefreshTokenAuthUrl(int $requestId): string
+    private function buildRefreshTokenAuthUrl(SignatureRequest $request): string
     {
-        // $scheme      = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-        // $host        = $_SERVER['HTTP_HOST'] ?? 'localhost:5001';
-        // $callbackUri = "{$scheme}://{$host}/api/signature-requests/{$requestId}/refresh-tx-token";
+        $callbackUri = $this->urlBuilder->getApiUrl($request->getId(), 'refresh-tx-token');
 
-        $scheme      = (!empty($_SERVER['HTTP_X_FORWARDED_PROTO'])) ? $_SERVER['HTTP_X_FORWARDED_PROTO'] : ((!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http');
-        $host        = $_SERVER['HTTP_X_FORWARDED_HOST'] ?? $_SERVER['HTTP_HOST'] ?? 'localhost:5001';
-        $prefix      = !empty($_SERVER['HTTP_X_FORWARDED_PREFIX']) ? '/' . trim((string)$_SERVER['HTTP_X_FORWARDED_PREFIX'], '/') : '';
-        $callbackUri = "{$scheme}://{$host}{$prefix}/api/signature-requests/{$requestId}/refresh-tx-token";
+        return $this->identityService->getAuthorizationUrlWithCustomRedirect(
+            'trustedx_pki',
+            $callbackUri,
+            $this->buildStateContext($request)
+        );
+    }
 
+    /**
+     * Contexte signé dans le state OAuth2 : lie le retour TrustedX à la demande, à l'étape et au signataire.
+     */
+    private function buildStateContext(SignatureRequest $request): array
+    {
+        return [
+            'requestId' => $request->getId(),
+            'step'      => $request->getCurrentStep(),
+            'userId'    => $request->getSignatoryByOrder($request->getCurrentStep())->getUser()->getId(),
+        ];
+    }
 
-        return $this->identityService->getAuthorizationUrlWithCustomRedirect('trustedx_pki', $callbackUri);
+    private function getSignatoryMatchingState(SignatureRequest $request, ?string $state): Signatory
+    {
+        $signatory = $request->getSignatoryByOrder($request->getCurrentStep());
+        if ($signatory === null
+            || $signatory->getStatus() !== Signatory::STATUS_PENDING
+            || !$request->isOpenForSigning()
+            || $this->identityService->getVerifiedStateContext($state) !== $this->buildStateContext($request)
+        ) {
+            throw new Exception("Retour TrustedX invalide pour cette demande de signature.", 403);
+        }
+
+        return $signatory;
+    }
+
+    /**
+     * Enregistre le PDF signé de l'étape en cours puis fait avancer la demande (étape suivante ou demande signée).
+     *
+     * @return array{isCompleted: bool, nextStep: int}
+     */
+    private function recordSignedStep(
+        SignatureRequest $request,
+        Signatory $signatory,
+        string $signedPdfContent,
+        string $filePrefix
+    ): array {
+        $currentStep = $request->getCurrentStep();
+        $newPath = $this->fileStorage->storeSignedVersion($filePrefix, $currentStep, $signedPdfContent);
+
+        $request->setFileCurrent($newPath);
+        $signatory->setStatus(Signatory::STATUS_SIGNED);
+        $signatory->setSignedAt(new \DateTime());
+
+        if ($currentStep < $request->getSignatories()->count()) {
+            $request->setCurrentStep($currentStep + 1);
+            $request->setStatus(SignatureRequest::STATUS_PARTIALLY_SIGNED);
+        } else {
+            $request->setStatus(SignatureRequest::STATUS_SIGNED);
+            $request->setFileSigned($newPath);
+        }
+        $this->em->flush();
+
+        return [
+            'isCompleted' => $request->getStatus() === SignatureRequest::STATUS_SIGNED,
+            'nextStep'    => $request->getCurrentStep(),
+        ];
+    }
+
+    /**
+     * Contrôle activable (SIGN_LOCAL_NPI_CHECK) : le serialNumber du certificat de la clé USB doit être
+     * le NPI du signataire, lié à son compte via son identité TrustedX. Comparaison sur les seuls chiffres
+     * (le serialNumber peut porter un préfixe, ex. IDCBJ-).
+     */
+    private function assertCertificateBelongsToSignatory(Signatory $signatory, ?string $certificateSerialNumber): void
+    {
+        $npi = null;
+        foreach ($this->identityService->getUserIdentities($signatory->getUser()->getId()) as $identity) {
+            if ($identity['providerCode'] === 'trustedx_pki') {
+                $npi = (string)$identity['providerIdentifier'];
+            }
+        }
+
+        $npiDigits = preg_replace('/\D/', '', (string)$npi);
+        if ($npiDigits === '' || $npiDigits !== preg_replace('/\D/', '', (string)$certificateSerialNumber)) {
+            throw new Exception("Le certificat de la clé USB n'appartient pas au signataire attendu (NPI différent).", 412);
+        }
+    }
+
+    /**
+     * Identifiants TrustedX stockés sous la forme "processId::documentId" ou "processId".
+     *
+     * @return array{0: ?string, 1: ?string}
+     */
+    private function parseTxId(Signatory $signatory): array
+    {
+        $storedTxId = (string)$signatory->getSignatureTxId();
+        if ($storedTxId === '') {
+            return [null, null];
+        }
+        $parts = explode('::', $storedTxId, 2);
+
+        return [$parts[0], $parts[1] ?? null];
     }
 
     /**
@@ -523,15 +442,28 @@ class SignatureProcessService
     }
 
     /**
-     * Initialise les dossiers de stockage sur le disque
+     * Chemin du PDF à afficher, ou null si la demande n'existe pas ou n'est pas accessible à l'utilisateur.
      */
-    private function ensureStorageDirectories(): void
+    public function getPdfFilePathForUser(int $requestId, UserSuperClass $user): ?string
     {
-        foreach (['', '/original', '/current'] as $sub) {
-            $dir = $this->storageDir . $sub;
-            if (!is_dir($dir)) {
-                mkdir($dir, 0775, true);
+        $request = $this->getRequestById($requestId);
+        if ($request === null || !$this->canViewRequest($request, $user)) {
+            return null;
+        }
+
+        $filePath = $request->getFileSigned() ?: ($request->getFileCurrent() ?: $request->getFileOriginal());
+        return ($filePath && file_exists($filePath)) ? $filePath : null;
+    }
+
+    private function canViewRequest(SignatureRequest $request, UserSuperClass $user): bool
+    {
+        foreach ($request->getSignatories() as $signatory) {
+            if ($signatory->getUser() !== null && $signatory->getUser()->getId() === $user->getId()) {
+                return true;
             }
         }
+
+        return $request->getAnr() !== null
+            && $this->userAnrTable->findByAnrAndUser($request->getAnr(), $user) !== null;
     }
 }

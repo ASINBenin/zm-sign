@@ -36,7 +36,7 @@ class TrustedXSignatureClient
 
         $url = $this->config['esignsp_processes_url'];
         if (empty($url)) {
-            throw new Exception("URL de processus de signature manquante.", 400);
+            throw new Exception("URL de processus de signature manquante.", 412);
         }
 
         $sanitizedName = preg_replace('/\s+/', '-', trim($signerName ?: 'Signataire'));
@@ -181,7 +181,7 @@ class TrustedXSignatureClient
         $data = json_decode((string)$response, true);
         if ($httpCode >= 400 || !is_array($data) || empty($data['id'])) {
             $msg = $data['error_description'] ?? $data['message'] ?? "Code HTTP $httpCode retourné par TrustedX";
-            throw new Exception("Échec de création du processus de signature : " . $msg, 400);
+            throw new Exception("Échec de création du processus de signature : " . $msg, 412);
         }
 
         return $data;
@@ -282,7 +282,7 @@ class TrustedXSignatureClient
         curl_close($ch);
 
         if ($error || $httpCode >= 400) {
-            throw new Exception("Impossible de récupérer les détails du processus $processId (HTTP $httpCode)", 400);
+            throw new Exception("Impossible de récupérer les détails du processus $processId (HTTP $httpCode)", 412);
         }
 
         return json_decode((string)$response, true) ?? [];
@@ -315,7 +315,7 @@ class TrustedXSignatureClient
         curl_close($ch);
 
         if ($error || $httpCode >= 400 || empty($response)) {
-            throw new Exception("Impossible de récupérer le document signé depuis TrustedX (HTTP $httpCode).", 400);
+            throw new Exception("Impossible de récupérer le document signé depuis TrustedX (HTTP $httpCode).", 412);
         }
 
         return (string)$response;

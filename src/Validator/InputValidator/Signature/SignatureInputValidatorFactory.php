@@ -17,6 +17,7 @@ class SignatureInputValidatorFactory implements FactoryInterface
 
         $withUser = [
             PostInitiateSignInputValidator::class,
+            PostRejectSignatureInputValidator::class,
             PostUploadSignedDocumentInputValidator::class,
             GetReauthUrlInputValidator::class,
         ];

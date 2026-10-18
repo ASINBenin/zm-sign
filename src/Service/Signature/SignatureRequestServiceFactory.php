@@ -10,12 +10,10 @@ class SignatureRequestServiceFactory implements FactoryInterface
 {
     public function __invoke(ContainerInterface $container, $requestedName, ?array $options = null): SignatureRequestService
     {
-        $em = $container->get('doctrine.entitymanager.orm_cli');
-        $config = $container->get('config');
-        $deliverableService = $container->has(DeliverableGenerationService::class) 
-            ? $container->get(DeliverableGenerationService::class) 
-            : null;
-
-        return new SignatureRequestService($em, $config, $deliverableService);
+        return new SignatureRequestService(
+            $container->get('doctrine.entitymanager.orm_cli'),
+            $container->get(DeliverableGenerationService::class),
+            $container->get(SignatureFileStorage::class)
+        );
     }
 }

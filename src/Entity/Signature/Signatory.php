@@ -12,6 +12,9 @@ use Monarc\Core\Entity\UserSuperClass;
  * @ORM\Table(name="signature_signatories", indexes={
  *     @ORM\Index(name="idx_signatory_req", columns={"request_id"}),
  *     @ORM\Index(name="idx_signatory_user", columns={"user_id"})
+ * }, uniqueConstraints={
+ *     @ORM\UniqueConstraint(name="uniq_signatory_user", columns={"request_id", "user_id"}),
+ *     @ORM\UniqueConstraint(name="uniq_signatory_order", columns={"request_id", "order_index"})
  * })
  * @ORM\HasLifecycleCallbacks()
  */
@@ -23,7 +26,6 @@ class Signatory
     public const STATUS_PENDING = 'pending';
     public const STATUS_SIGNED = 'signed';
     public const STATUS_REJECTED = 'rejected';
-    public const STATUS_SKIPPED = 'skipped';
 
     /**
      * @ORM\Id

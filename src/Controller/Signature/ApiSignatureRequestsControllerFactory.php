@@ -12,12 +12,10 @@ class ApiSignatureRequestsControllerFactory implements FactoryInterface
 {
     public function __invoke(ContainerInterface $container, $requestedName, ?array $options = null): ApiSignatureRequestsController
     {
-        $signatureRequestService = $container->get(SignatureRequestService::class);
-        $connectedUserService = $container->has(ConnectedUserService::class)
-            ? $container->get(ConnectedUserService::class)
-            : null;
-        $postSignatureRequestValidator = $container->get(PostSignatureRequestInputValidator::class);
-
-        return new ApiSignatureRequestsController($signatureRequestService, $postSignatureRequestValidator, $connectedUserService);
+        return new ApiSignatureRequestsController(
+            $container->get(SignatureRequestService::class),
+            $container->get(PostSignatureRequestInputValidator::class),
+            $container->get(ConnectedUserService::class)
+        );
     }
 }
