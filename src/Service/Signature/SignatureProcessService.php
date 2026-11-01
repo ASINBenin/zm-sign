@@ -51,6 +51,8 @@ class SignatureProcessService
      */
     public function initiateSignStep(int $requestId, UserSuperClass $connectedUser, ?string $signatureImageBase64 = null): array
     {
+        $this->trustedXClient->assertConfigured();
+
         $request   = $this->getRequestById($requestId);
         $currentStep = $request->getCurrentStep();
         $signatory = $request->getSignatoryByOrder($currentStep);
@@ -138,6 +140,8 @@ class SignatureProcessService
         if (!$signatory || $signatory->getUser()->getId() !== $connectedUser->getId()) {
             return ['valid' => false, 'requireAuth' => false, 'message' => "Ce n'est pas votre tour de signer."];
         }
+
+        $this->trustedXClient->assertConfigured();
 
         try {
             $token = $this->identityService->getValidAccessTokenForUser($connectedUser);

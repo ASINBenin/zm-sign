@@ -15,6 +15,13 @@ class TrustedXSignatureClient
         $this->config = $config;
     }
 
+    public function assertConfigured(): void
+    {
+        if (empty($this->config['trustedx_url']) || empty($this->config['client_id'])) {
+            throw new Exception("La signature électronique n'est pas configurée sur ce serveur.", 412);
+        }
+    }
+
     /**
      * Crée un processus de signature sur TrustedX (multipart/form-data)
      */

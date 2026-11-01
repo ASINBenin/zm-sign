@@ -12,13 +12,12 @@ class TrustedXSignatureClientFactory implements FactoryInterface
         $config = $container->get('Config');
         $ssoConfig = $config['sso_providers']['trustedx_pki'] ?? [];
 
-        $baseUrl = rtrim((string)($ssoConfig['base_url'] ?? (getenv('TRUSTEDX_URL') ?: '')), '/');
-        if (empty($baseUrl)) {
-            throw new \RuntimeException("La configuration 'sso_providers.trustedx_pki.base_url' ou la variable d'environnement 'TRUSTEDX_URL' est requise.");
-        }
+        // Peut rester vide : seul l'appel à TrustedX l'exige, pas l'aperçu du PDF ni la signature locale
+        $baseUrl = rtrim((string)(($ssoConfig['base_url'] ?? '') ?: getenv('TRUSTEDX_URL') ?: ''), '/');
 
         return new TrustedXSignatureClient([
             'trustedx_url'           => $baseUrl,
+            'client_id'              => $ssoConfig['client_id'] ?? '',
             'esignsp_processes_url'  => $ssoConfig['esignsp_processes_url'] ?? ($baseUrl . '/trustedx-resources/esignsp/v2/signer_processes'),
             'esignsp_ui_url'         => $ssoConfig['esignsp_ui_url'] ?? ($baseUrl . '/trustedx-resources/esignsp/v2/ui'),
             'esignsp_documents_url'  => $ssoConfig['esignsp_documents_url'] ?? ($baseUrl . '/trustedx-resources/esignsp/v2/documents'),
