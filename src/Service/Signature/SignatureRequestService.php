@@ -8,11 +8,15 @@ use Monarc\Core\Entity\UserSuperClass;
 use Monarc\Sign\Entity\Signature\Signatory;
 use Monarc\Sign\Entity\Signature\SignatureRequest;
 use Monarc\FrontOffice\Entity\Anr;
+use Monarc\FrontOffice\Entity\Delivery;
 use Monarc\FrontOffice\Entity\User;
 use Monarc\FrontOffice\Service\DeliverableGenerationService;
 
 class SignatureRequestService
 {
+    // Statut « Final » d'un livrable (0 : brouillon)
+    private const DELIVERY_STATUS_FINAL = 1;
+
     private EntityManager $em;
     private DeliverableGenerationService $deliverableService;
     private SignatureFileStorage $fileStorage;
@@ -113,7 +117,15 @@ class SignatureRequestService
     public function createFromDeliverableData(Anr $anr, array $data, UserSuperClass $connectedUser): array
     {
         $docType = (int)$data['deliverableDocType'];
-        $title = !empty($data['title']) ? trim((string)$data['title']) : "Livrable type {$docType}";
+        // Seul le rapport final, au statut « Final », se signe
+        if ($docType !== Delivery::DOC_TYPE_FINAL_REPORT || (int)($data['status'] ?? 0) !== self::DELIVERY_STATUS_FINAL) {
+            throw new Exception('Seul le rapport final au statut « Final » peut être signé.', 412);
+        }
+        $title = trim((string)($data['docname'] ?? $data['title'] ?? ''));
+        if ($title === '') {
+            $version = trim((string)($data['version'] ?? ''));
+            $title = 'Rapport final - ' . $anr->getLabel() . ($version === '' ? '' : ' - v' . $version);
+        }
         $signatories = (array)($data['signatories'] ?? []);
 
         // Si aucun signataire n'est passé, ajouter l'utilisateur connecté en 1er signataire
@@ -132,6 +144,7 @@ class SignatureRequestService
         $deliverableParams = $data;
         $deliverableParams['typedoc'] = $docType;
         $deliverableParams['format'] = 'pdf';
+        $deliverableParams['docname'] = $title;
         $generated = $this->deliverableService->generateDeliverableWithValues($anr, $docType, $deliverableParams);
 
         $request = $this->createSignatureRequest(
