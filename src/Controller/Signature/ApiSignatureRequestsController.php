@@ -25,7 +25,10 @@ class ApiSignatureRequestsController extends AbstractRestfulControllerRequestHan
         /** @var Anr $anr */
         $anr = $this->getRequest()->getAttribute('anr');
 
-        return $this->getPreparedJsonResponse($this->signatureRequestService->getFormattedRequestsByAnr($anr));
+        return $this->getPreparedJsonResponse($this->signatureRequestService->getFormattedRequestsByAnr(
+            $anr,
+            $this->connectedUserService->getConnectedUser()
+        ));
     }
 
     public function get($id)
@@ -33,7 +36,11 @@ class ApiSignatureRequestsController extends AbstractRestfulControllerRequestHan
         /** @var Anr $anr */
         $anr = $this->getRequest()->getAttribute('anr');
 
-        return $this->getPreparedJsonResponse($this->signatureRequestService->getFormattedRequestById($anr, (int)$id));
+        return $this->getPreparedJsonResponse($this->signatureRequestService->getFormattedRequestById(
+            $anr,
+            (int)$id,
+            $this->connectedUserService->getConnectedUser()
+        ));
     }
 
     public function create($data)

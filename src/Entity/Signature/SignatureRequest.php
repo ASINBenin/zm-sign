@@ -5,6 +5,7 @@ namespace Monarc\Sign\Entity\Signature;
 use Doctrine\Common\Collections\ArrayCollection;
 use Doctrine\Common\Collections\Collection;
 use Doctrine\ORM\Mapping as ORM;
+use Monarc\Core\Entity\UserSuperClass;
 use Monarc\Core\Entity\Traits\CreateEntityTrait;
 use Monarc\Core\Entity\Traits\UpdateEntityTrait;
 use Monarc\FrontOffice\Entity\Anr;
@@ -134,6 +135,26 @@ class SignatureRequest
             $signatory->setRequest($this);
         }
         return $this;
+    }
+
+    // L'initiateur suit toujours sa demande ; un signataire ne voit le document qu'une fois son tour arrivé
+    public function hasReachedUser(UserSuperClass $user): bool
+    {
+        if ($this->creator === $user->getEmail()) {
+            return true;
+        }
+        if ($this->status === self::STATUS_PENDING_CONFIG) {
+            return false;
+        }
+        foreach ($this->signatories as $signatory) {
+            if ($signatory->getUser()?->getId() === $user->getId()
+                && $signatory->getOrderIndex() <= $this->currentStep
+            ) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function getSignatoryByOrder(int $order): ?Signatory

@@ -24,6 +24,7 @@ class SignatureProcessServiceFactory implements FactoryInterface
             $container->get(LocalPdfSignatureVerifier::class),
             $container->get(SignatureUrlBuilder::class),
             $container->get(SignatureFileStorage::class),
+            $container->get(SignatureNotificationService::class),
             filter_var(getenv('SIGN_LOCAL_NPI_CHECK') ?: 'false', FILTER_VALIDATE_BOOLEAN)
         );
     }

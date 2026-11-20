@@ -36,6 +36,7 @@ return [
             \Monarc\Sign\Service\Signature\SignatureProcessService::class => \Monarc\Sign\Service\Signature\SignatureProcessServiceFactory::class,
             \Monarc\Sign\Service\Signature\TrustedXSignatureClient::class => \Monarc\Sign\Service\Signature\TrustedXSignatureClientFactory::class,
             \Monarc\Sign\Service\Signature\SignatureUrlBuilder::class => \Monarc\Sign\Service\Signature\SignatureUrlBuilderFactory::class,
+            \Monarc\Sign\Service\Signature\SignatureNotificationService::class => \Laminas\ServiceManager\AbstractFactory\ReflectionBasedAbstractFactory::class,
             \Monarc\Sign\Service\Signature\SignatureFileStorage::class => \Laminas\ServiceManager\Factory\InvokableFactory::class,
             \Monarc\Sign\Service\Signature\LocalPdfSignatureVerifier::class => \Laminas\ServiceManager\Factory\InvokableFactory::class,
             \Monarc\Sign\Validator\InputValidator\Signature\PostInitiateSignInputValidator::class => \Monarc\Sign\Validator\InputValidator\Signature\SignatureInputValidatorFactory::class,

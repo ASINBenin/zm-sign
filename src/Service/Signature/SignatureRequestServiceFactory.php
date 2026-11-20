@@ -13,7 +13,8 @@ class SignatureRequestServiceFactory implements FactoryInterface
         return new SignatureRequestService(
             $container->get('doctrine.entitymanager.orm_cli'),
             $container->get(DeliverableGenerationService::class),
-            $container->get(SignatureFileStorage::class)
+            $container->get(SignatureFileStorage::class),
+            $container->get(SignatureNotificationService::class)
         );
     }
 }

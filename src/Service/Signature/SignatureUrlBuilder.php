@@ -27,11 +27,22 @@ class SignatureUrlBuilder
 
     public function getFrontUrl(?SignatureRequest $request, string $page, array $query = []): string
     {
-        $url = $request !== null && $request->getAnr() !== null
-            ? $this->getBasePath() . "/#/client/project/{$request->getAnr()->getId()}/anr/{$page}/{$request->getId()}"
-            : $this->getBasePath() . '/#/client';
+        $url = $this->getBasePath() . $this->getFrontRoute($request, $page);
 
         return $query === [] ? $url : $url . '?' . http_build_query($query);
+    }
+
+    // Lien complet, pour les courriels
+    public function getAbsoluteFrontUrl(SignatureRequest $request, string $page): string
+    {
+        return $this->getBaseUrl() . $this->getFrontRoute($request, $page);
+    }
+
+    private function getFrontRoute(?SignatureRequest $request, string $page): string
+    {
+        return $request !== null && $request->getAnr() !== null
+            ? "/#/client/project/{$request->getAnr()->getId()}/anr/{$page}/{$request->getId()}"
+            : '/#/client';
     }
 
     private function getBaseUrl(): string

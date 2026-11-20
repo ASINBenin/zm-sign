@@ -19,6 +19,7 @@ class SignatureProcessService
     private LocalPdfSignatureVerifier $localSignatureVerifier;
     private SignatureUrlBuilder $urlBuilder;
     private SignatureFileStorage $fileStorage;
+    private SignatureNotificationService $notificationService;
     private bool $checkLocalSignerNpi;
 
     public function __construct(
@@ -29,6 +30,7 @@ class SignatureProcessService
         LocalPdfSignatureVerifier $localSignatureVerifier,
         SignatureUrlBuilder $urlBuilder,
         SignatureFileStorage $fileStorage,
+        SignatureNotificationService $notificationService,
         bool $checkLocalSignerNpi
     ) {
         $this->em = $em;
@@ -38,6 +40,7 @@ class SignatureProcessService
         $this->localSignatureVerifier = $localSignatureVerifier;
         $this->urlBuilder = $urlBuilder;
         $this->fileStorage = $fileStorage;
+        $this->notificationService = $notificationService;
         $this->checkLocalSignerNpi = $checkLocalSignerNpi;
     }
 
@@ -246,6 +249,7 @@ class SignatureProcessService
         $request->setStatus(SignatureRequest::STATUS_REJECTED);
         $request->setRejectionReason($reason);
         $this->em->flush();
+        $this->notificationService->notifyRejected($request, $signatory);
 
         // Nettoyage best-effort d'un éventuel processus TrustedX déjà ouvert pour cette étape.
         // "LOCAL:" : marqueur des anciennes signatures locales, sans processus TrustedX.
@@ -386,6 +390,7 @@ class SignatureProcessService
             $request->setFileSigned($newPath);
         }
         $this->em->flush();
+        $this->notificationService->notifyStepSigned($request, $signatory);
 
         return [
             'isCompleted' => $request->getStatus() === SignatureRequest::STATUS_SIGNED,
@@ -459,15 +464,15 @@ class SignatureProcessService
         return ($filePath && file_exists($filePath)) ? $filePath : null;
     }
 
+    // Une fois signé, le document est visible de tous les utilisateurs de l'analyse
     private function canViewRequest(SignatureRequest $request, UserSuperClass $user): bool
     {
-        foreach ($request->getSignatories() as $signatory) {
-            if ($signatory->getUser() !== null && $signatory->getUser()->getId() === $user->getId()) {
-                return true;
-            }
+        if ($request->hasReachedUser($user)) {
+            return true;
         }
 
-        return $request->getAnr() !== null
+        return $request->getStatus() === SignatureRequest::STATUS_SIGNED
+            && $request->getAnr() !== null
             && $this->userAnrTable->findByAnrAndUser($request->getAnr(), $user) !== null;
     }
 }

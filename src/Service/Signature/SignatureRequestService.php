@@ -20,21 +20,24 @@ class SignatureRequestService
     private EntityManager $em;
     private DeliverableGenerationService $deliverableService;
     private SignatureFileStorage $fileStorage;
+    private SignatureNotificationService $notificationService;
 
     public function __construct(
         EntityManager $em,
         DeliverableGenerationService $deliverableService,
-        SignatureFileStorage $fileStorage
+        SignatureFileStorage $fileStorage,
+        SignatureNotificationService $notificationService
     ) {
         $this->em = $em;
         $this->deliverableService = $deliverableService;
         $this->fileStorage = $fileStorage;
+        $this->notificationService = $notificationService;
     }
 
     /**
      * Récupère la liste formatée (DTO) des demandes pour l'API REST
      */
-    public function getFormattedRequestsByAnr(Anr $anr): array
+    public function getFormattedRequestsByAnr(Anr $anr, UserSuperClass $user): array
     {
         $result = [];
 
@@ -62,6 +65,7 @@ class SignatureRequestService
                 'currentStep'     => $req->getCurrentStep(),
                 'totalSteps'      => count($signatories),
                 'createdAt'       => $this->formatDateTime($req->getCreatedAt()),
+                'canViewDocument' => $this->canViewDocument($req, $user),
                 'signatories'     => $signatories,
             ];
         }
@@ -75,7 +79,7 @@ class SignatureRequestService
     /**
      * Récupère les détails formatés (DTO) d'une demande pour l'API REST
      */
-    public function getFormattedRequestById(Anr $anr, int $id): array
+    public function getFormattedRequestById(Anr $anr, int $id, UserSuperClass $user): array
     {
         $request = $this->getRequestForAnr($anr, $id);
 
@@ -107,6 +111,7 @@ class SignatureRequestService
             'status'          => $request->getStatus(),
             'rejectionReason' => $request->getRejectionReason(),
             'currentStep'     => $request->getCurrentStep(),
+            'canViewDocument' => $this->canViewDocument($request, $user),
             'signatories'     => $signatories,
         ];
     }
@@ -186,6 +191,10 @@ class SignatureRequestService
             throw new Exception("Impossible de modifier la configuration d'un document dont le processus de signature a déjà démarré.", 403);
         }
 
+        $previousFirstSignerId = $request->getStatus() === SignatureRequest::STATUS_PENDING
+            ? $request->getSignatoryByOrder(1)?->getUser()?->getId()
+            : null;
+
         // Nettoyage des signataires existants
         foreach ($request->getSignatories() as $sig) {
             $this->em->remove($sig);
@@ -202,6 +211,13 @@ class SignatureRequestService
         }
 
         $this->em->flush();
+
+        // Une nouvelle sauvegarde ne relance pas le premier signataire s'il n'a pas changé
+        if ($request->getStatus() === SignatureRequest::STATUS_PENDING
+            && $request->getSignatoryByOrder(1)?->getUser()?->getId() !== $previousFirstSignerId
+        ) {
+            $this->notificationService->notifyCircuitStarted($request);
+        }
 
         return $request;
     }
@@ -301,6 +317,12 @@ class SignatureRequestService
     /**
      * Formate une date pour l'affichage, au fuseau du Bénin (les dates sont stockées au fuseau PHP de l'application)
      */
+    // Liste et détail sont réservés aux utilisateurs de l'analyse : un document signé leur est visible
+    private function canViewDocument(SignatureRequest $request, UserSuperClass $user): bool
+    {
+        return $request->getStatus() === SignatureRequest::STATUS_SIGNED || $request->hasReachedUser($user);
+    }
+
     private function formatDateTime(?\DateTime $dateTime): ?string
     {
         if (!$dateTime) {
